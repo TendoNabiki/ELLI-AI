@@ -12,4 +12,4 @@ Team Members:
 
   - Vikranth Maddali
 
-  - Brian Chou
+  - Brian Suh
