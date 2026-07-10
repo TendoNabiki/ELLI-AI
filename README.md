@@ -1,5 +1,5 @@
 # ELLI-AI
-This is the LLm project made by the team Eightfold in the UTdallas summer camp.
+This is the LLm project made by the team Eightfold in the UTDallas summer camp.
 
 
 Team Members:
