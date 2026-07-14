@@ -1,5 +1,7 @@
+
+Accent colors for website:
 16, 235, 158   #10eb9e
 
-
+Copy and paste into terminal to run:
 pip install -r requirements.txt
 streamlit run streamlit_app.py
