@@ -12,7 +12,7 @@ from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KNeighborsClassifier
 from pathlib import Path
-from tokenizers import Tokenizer  # ADDED: your real BPE tokenizer, replacing the byte-level stand-in
+from tokenizers import Tokenizer
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -46,7 +46,7 @@ def get_lr(step):
     min_lr = lr * min_lr_ratio
     return min_lr + coeff * (lr - min_lr)
 
-# ADDED: SMOKE_TEST mode -- runs a handful of steps on your real model size, real
+# SMOKE_TEST mode -- runs a handful of steps on your real model size, real
 # block_size, and real batch_size (so it still tells you whether the model fits in
 # your RTX 5080's VRAM), just with far fewer steps so you get a pass/fail answer in
 # seconds instead of committing to the full run blind. Flip to False for the real run.
@@ -58,9 +58,8 @@ if SMOKE_TEST:
     warmup_steps = 5
     print("=== SMOKE_TEST=True: quick sanity pass on the real model/data, not a real training run ===")
 
-# --- CHANGED: real tokenizer instead of byte-level.
 tokenizer = Tokenizer.from_file("my_custom_tokenizer.json")
-vocab_size = tokenizer.get_vocab_size()  # was hardcoded 256, now pulled from your actual tokenizer
+vocab_size = tokenizer.get_vocab_size()
 
 def encode(s: str):
     return tokenizer.encode(s).ids
@@ -68,22 +67,42 @@ def encode(s: str):
 def decode(ids):
     return tokenizer.decode(ids)
 
-# --- CHANGED: reads train.bin / val.bin directly, produced by prepare_bin_data.py
-# (see that script -- it encodes Training_Data/*.json with my_custom_tokenizer.json
-# and saves uint16 token ids, which fits since your vocab_size=10000 < 65536).
-# If you already have your own .bin-writing script with a different layout
-# (different dtype, padding, etc.), tell me and I'll match it exactly instead.
-train_data = torch.from_numpy(np.fromfile("Training_Data/train.bin", dtype=np.uint16).astype(np.int64))
-val_data = torch.from_numpy(np.fromfile("Training_Data/val.bin", dtype=np.uint16).astype(np.int64))
+# CHANGED: your Training_Data folder has ~1000 .bin files (cosmopedia-v2 is
+# just one of them), not a single named file. Load every .bin file in the
+# folder and concatenate them in sorted order into one stream, then apply the
+# same EOS-boundary split as before on top of that combined stream -- the
+# split still snaps to a document edge, it just doesn't matter which of the
+# 1000 source files that edge happens to land in.
+BIN_DIR = "Training_Data"
+VAL_FRACTION = 0.05  # fraction of tokens (snapped to the nearest document boundary) held out for val
 
-# ADDED: optional, flexible control over how much data actually gets used. Leave
-# both as None to use the full .bin files (previous/default behavior). Set
-# DATA_FRACTION for a quick percentage-based subset, or MAX_*_TOKENS for a hard
-# token-count cap -- either works standalone, or combine them (fraction applied
-# first, then the cap).
+bin_paths = sorted(Path(BIN_DIR).glob("*.bin"))
+if not bin_paths:
+    raise FileNotFoundError(f"No .bin files found in {BIN_DIR}/")
+
+all_tokens = np.concatenate([np.fromfile(p, dtype=np.uint16) for p in bin_paths])
+print(f"loaded {len(bin_paths)} .bin files, {len(all_tokens):,} tokens total")
+
+eos_id = tokenizer.token_to_id("[EOS]")
+eos_positions = np.where(all_tokens == eos_id)[0]
+
+if VAL_FRACTION <= 0 or len(eos_positions) == 0:
+    split_point = len(all_tokens)  # no val split -- everything is train
+else:
+    target = int((1 - VAL_FRACTION) * len(all_tokens))
+    candidates = eos_positions[eos_positions >= target]
+    # +1 so the split lands right after the EOS token (EOS stays with train,
+    # the next document -- whichever one it is -- starts val)
+    split_point = (candidates[0] + 1) if len(candidates) > 0 else (eos_positions[-1] + 1)
+
+train_data = torch.from_numpy(all_tokens[:split_point].astype(np.int64))
+val_data = torch.from_numpy(all_tokens[split_point:].astype(np.int64))
+
+# Optional, flexible control over how much data actually gets used. Leave both
+# as None to use everything up through the split above (default behavior).
 DATA_FRACTION = None     # e.g. 0.1 = use only the first 10% of tokens in each split
-MAX_TRAIN_TOKENS = None  # e.g. 2_000_000 = cap train.bin at 2M tokens
-MAX_VAL_TOKENS = None    # same idea, for val.bin
+MAX_TRAIN_TOKENS = None  # e.g. 2_000_000 = cap training tokens
+MAX_VAL_TOKENS = None    # same idea, for val
 
 if DATA_FRACTION is not None:
     train_data = train_data[:int(len(train_data) * DATA_FRACTION)]
@@ -93,8 +112,8 @@ if MAX_TRAIN_TOKENS is not None:
 if MAX_VAL_TOKENS is not None:
     val_data = val_data[:MAX_VAL_TOKENS]
 
-assert len(train_data) > block_size + 1, "train.bin has fewer tokens than block_size -- check prepare_bin_data.py ran on your full corpus"
-assert len(val_data) > block_size + 1, "val.bin has fewer tokens than block_size -- corpus too small for this block_size"
+assert len(train_data) > block_size + 1, f"train split has fewer tokens than block_size -- check {BIN_DIR}/*.bin exists and has enough data"
+assert len(val_data) > block_size + 1, f"val split has fewer tokens than block_size -- lower block_size, raise VAL_FRACTION, or check {BIN_DIR}/*.bin has more than one document"
 
 torch.manual_seed(0)
 
@@ -229,11 +248,9 @@ class ELLI(nn.Module):
 model = ELLI(vocab_size, d_model, n_heads, n_layers, block_size).to(device)
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-# CHANGED: torch.compile() itself doesn't fail even on an unsupported setup -- it
-# compiles lazily on first real call, so wrapping only the compile() line in
-# try/except wouldn't have caught a broken setup until deep into your first real
-# training step. This runs one dummy forward pass right now to force compilation
-# immediately and fall back to eager mode cleanly if it doesn't work.
+# torch.compile() itself doesn't fail even on an unsupported setup -- it compiles
+# lazily on first real call, so this runs one dummy forward pass right now to force
+# compilation immediately and fall back to eager mode cleanly if it doesn't work.
 try:
     compiled_model = torch.compile(model)
     with torch.no_grad():
@@ -245,13 +262,16 @@ try:
 except Exception as e:
     print(f"torch.compile: failed, falling back to eager mode ({e})")
 
-# CHANGED: bf16 instead of fp16, per your RTX 5080 (Blackwell -- full native bf16
-# tensor core support). bf16 has the same exponent range as fp32, so unlike fp16 it
-# doesn't need GradScaler / loss scaling at all -- that machinery is removed below.
+# bf16 for RTX 5080 (Blackwell -- full native bf16 tensor core support). bf16 has
+# the same exponent range as fp32, so unlike fp16 it doesn't need GradScaler /
+# loss scaling at all.
 amp_dtype = torch.bfloat16
 
 checkpoint_dir = Path("checkpoints")
 checkpoint_dir.mkdir(exist_ok=True)
+# CHANGED: back to tracking best val loss (a real generalization signal) rather
+# than train loss (which keeps trending down even if the model starts
+# memorizing, so it's a weaker signal on its own).
 best_val_loss = float("inf")
 
 print("device:", device)
@@ -281,7 +301,6 @@ for step in range(max_steps + 1):
 
     xb, yb = get_batch("train")
 
-    # CHANGED: bf16 autocast, no GradScaler needed (see note above).
     with torch.autocast(device_type=device, dtype=amp_dtype, enabled=True):
         _, loss = model(xb, yb)
 
