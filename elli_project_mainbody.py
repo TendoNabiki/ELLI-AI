@@ -12,8 +12,7 @@ from sklearn.linear_model import LinearRegression, LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.neighbors import KNeighborsClassifier
 from pathlib import Path
-from tokenizers import Tokenizer  # using a BPE tokenizer loaded from file
-
+from tokenizers import Tokenizer
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -47,8 +46,10 @@ def get_lr(step):
     min_lr = lr * min_lr_ratio
     return min_lr + coeff * (lr - min_lr)
 
-# SMOKE_TEST mode: quick sanity pass using real model sizes but far fewer steps
-# (useful to verify code and memory without running full training).
+# SMOKE_TEST mode -- runs a handful of steps on your real model size, real
+# block_size, and real batch_size (so it still tells you whether the model fits in
+# your RTX 5080's VRAM), just with far fewer steps so you get a pass/fail answer in
+# seconds instead of committing to the full run blind. Flip to False for the real run.
 SMOKE_TEST = True
 if SMOKE_TEST:
     max_steps = 20
@@ -57,9 +58,8 @@ if SMOKE_TEST:
     warmup_steps = 5
     print("=== SMOKE_TEST=True: quick sanity pass on the real model/data, not a real training run ===")
 
-# tokenizer: using BPE tokenizer loaded from file
 tokenizer = Tokenizer.from_file("my_custom_tokenizer.json")
-vocab_size = tokenizer.get_vocab_size()  # was hardcoded 256, now pulled from your actual tokenizer
+vocab_size = tokenizer.get_vocab_size()
 
 def encode(s: str):
     return tokenizer.encode(s).ids
@@ -67,18 +67,53 @@ def encode(s: str):
 def decode(ids):
     return tokenizer.decode(ids)
 
-# --- CHANGED: reads train.bin / val.bin directly, produced by prepare_bin_data.py
-# (see that script -- it encodes Training_Data/*.json with my_custom_tokenizer.json
-# and saves uint16 token ids, which fits since your vocab_size=10000 < 65536).
-# Loading of the data is deferred to `main()` so importing this module for
-# inference (e.g. from a Streamlit app) does not trigger heavy I/O or training.
-train_data = None
-val_data = None
+# CHANGED: your Training_Data folder has ~1000 .bin files (cosmopedia-v2 is
+# just one of them), not a single named file. Load every .bin file in the
+# folder and concatenate them in sorted order into one stream, then apply the
+# same EOS-boundary split as before on top of that combined stream -- the
+# split still snaps to a document edge, it just doesn't matter which of the
+# 1000 source files that edge happens to land in.
+BIN_DIR = "Training_Data"
+VAL_FRACTION = 0.05  # fraction of tokens (snapped to the nearest document boundary) held out for val
 
-# Config options to limit dataset size for testing: DATA_FRACTION, MAX_TRAIN_TOKENS, MAX_VAL_TOKENS
+bin_paths = sorted(Path(BIN_DIR).glob("*.bin"))
+if not bin_paths:
+    raise FileNotFoundError(f"No .bin files found in {BIN_DIR}/")
+
+all_tokens = np.concatenate([np.fromfile(p, dtype=np.uint16) for p in bin_paths])
+print(f"loaded {len(bin_paths)} .bin files, {len(all_tokens):,} tokens total")
+
+eos_id = tokenizer.token_to_id("[EOS]")
+eos_positions = np.where(all_tokens == eos_id)[0]
+
+if VAL_FRACTION <= 0 or len(eos_positions) == 0:
+    split_point = len(all_tokens)  # no val split -- everything is train
+else:
+    target = int((1 - VAL_FRACTION) * len(all_tokens))
+    candidates = eos_positions[eos_positions >= target]
+    # +1 so the split lands right after the EOS token (EOS stays with train,
+    # the next document -- whichever one it is -- starts val)
+    split_point = (candidates[0] + 1) if len(candidates) > 0 else (eos_positions[-1] + 1)
+
+train_data = torch.from_numpy(all_tokens[:split_point].astype(np.int64))
+val_data = torch.from_numpy(all_tokens[split_point:].astype(np.int64))
+
+# Optional, flexible control over how much data actually gets used. Leave both
+# as None to use everything up through the split above (default behavior).
 DATA_FRACTION = None     # e.g. 0.1 = use only the first 10% of tokens in each split
-MAX_TRAIN_TOKENS = None  # e.g. 2_000_000 = cap train.bin at 2M tokens
-MAX_VAL_TOKENS = None    # same idea, for val.bin
+MAX_TRAIN_TOKENS = None  # e.g. 2_000_000 = cap training tokens
+MAX_VAL_TOKENS = None    # same idea, for val
+
+if DATA_FRACTION is not None:
+    train_data = train_data[:int(len(train_data) * DATA_FRACTION)]
+    val_data = val_data[:int(len(val_data) * DATA_FRACTION)]
+if MAX_TRAIN_TOKENS is not None:
+    train_data = train_data[:MAX_TRAIN_TOKENS]
+if MAX_VAL_TOKENS is not None:
+    val_data = val_data[:MAX_VAL_TOKENS]
+
+assert len(train_data) > block_size + 1, f"train split has fewer tokens than block_size -- check {BIN_DIR}/*.bin exists and has enough data"
+assert len(val_data) > block_size + 1, f"val split has fewer tokens than block_size -- lower block_size, raise VAL_FRACTION, or check {BIN_DIR}/*.bin has more than one document"
 
 torch.manual_seed(0)
 
@@ -208,114 +243,76 @@ class ELLI(nn.Module):
         self.train()
         return idx
 
-def build_model():
-    """Construct a fresh ELLI model (uninitialized weights).
-    Use this to load checkpoints or for inference."""
-    return ELLI(vocab_size, d_model, n_heads, n_layers, block_size).to(device)
+# Train
 
+model = ELLI(vocab_size, d_model, n_heads, n_layers, block_size).to(device)
+optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-def load_model(checkpoint_path: str = None):
-    """Build the model and optionally load weights from `checkpoint_path`.
-    Returns the model on the correct device.
-    """
-    model = build_model()
-    if checkpoint_path is not None and Path(checkpoint_path).exists():
-        ck = torch.load(checkpoint_path, map_location=device)
-        model.load_state_dict(ck.get("model_state_dict", ck))
-    return model
+# torch.compile() itself doesn't fail even on an unsupported setup -- it compiles
+# lazily on first real call, so this runs one dummy forward pass right now to force
+# compilation immediately and fall back to eager mode cleanly if it doesn't work.
+try:
+    compiled_model = torch.compile(model)
+    with torch.no_grad():
+        _dummy_x, _dummy_y = get_batch("train")
+        with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
+            compiled_model(_dummy_x, _dummy_y)
+    model = compiled_model
+    print("torch.compile: enabled")
+except Exception as e:
+    print(f"torch.compile: failed, falling back to eager mode ({e})")
 
+# bf16 for RTX 5080 (Blackwell -- full native bf16 tensor core support). bf16 has
+# the same exponent range as fp32, so unlike fp16 it doesn't need GradScaler /
+# loss scaling at all.
+amp_dtype = torch.bfloat16
 
-def generate_text(model, prompt: str, max_new_tokens: int = 200):
-    ids = encode(prompt)
-    idx = torch.tensor([ids], dtype=torch.long, device=device)
-    out_idx = model.generate(idx, max_new_tokens=max_new_tokens)[0].tolist()
-    return decode(out_idx)
+checkpoint_dir = Path("checkpoints")
+checkpoint_dir.mkdir(exist_ok=True)
+# CHANGED: back to tracking best val loss (a real generalization signal) rather
+# than train loss (which keeps trending down even if the model starts
+# memorizing, so it's a weaker signal on its own).
+best_val_loss = float("inf")
 
+print("device:", device)
+print("vocab_size:", vocab_size)
+print("params:", sum(p.numel() for p in model.parameters()))
 
-def main():
-    """Original training logic moved here so importing this module is safe.
-    Run `python elli_project_mainbody.py` to start training as before.
-    """
-    global train_data, val_data
-    # load data
-    train_data = torch.from_numpy(np.fromfile("Training_Data/train.bin", dtype=np.uint16).astype(np.int64))
-    val_data = torch.from_numpy(np.fromfile("Training_Data/val.bin", dtype=np.uint16).astype(np.int64))
+start_time = time.time()
 
-    if DATA_FRACTION is not None:
-        train_data = train_data[:int(len(train_data) * DATA_FRACTION)]
-        val_data = val_data[:int(len(val_data) * DATA_FRACTION)]
-    if MAX_TRAIN_TOKENS is not None:
-        train_data = train_data[:MAX_TRAIN_TOKENS]
-    if MAX_VAL_TOKENS is not None:
-        val_data = val_data[:MAX_VAL_TOKENS]
+for step in range(max_steps + 1):
+    lr_now = get_lr(step)
+    for pg in optimizer.param_groups:
+        pg["lr"] = lr_now
 
-    assert len(train_data) > block_size + 1, "train.bin has fewer tokens than block_size -- check prepare_bin_data.py ran on your full corpus"
-    assert len(val_data) > block_size + 1, "val.bin has fewer tokens than block_size -- corpus too small for this block_size"
+    if step % eval_every == 0:
+        losses = estimate_loss(model)
+        elapsed = time.time() - start_time
+        print(f"step {step} | train {losses['train']:.4f} | val {losses['val']:.4f} | lr {lr_now:.2e} | {elapsed:.0f}s")
 
-    model = build_model()
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
+        if losses["val"] < best_val_loss:
+            best_val_loss = losses["val"]
+            torch.save({
+                "step": step,
+                "model_state_dict": model.state_dict(),
+                "optimizer_state_dict": optimizer.state_dict(),
+                "val_loss": best_val_loss,
+            }, checkpoint_dir / "best_model.pt")
 
-    # try compile
-    try:
-        compiled_model = torch.compile(model)
-        with torch.no_grad():
-            _dummy_x, _dummy_y = get_batch("train")
-            with torch.autocast(device_type=device, dtype=torch.bfloat16, enabled=True):
-                compiled_model(_dummy_x, _dummy_y)
-        model = compiled_model
-        print("torch.compile: enabled")
-    except Exception as e:
-        print(f"torch.compile: failed, falling back to eager mode ({e})")
+    xb, yb = get_batch("train")
 
-    amp_dtype = torch.bfloat16
+    with torch.autocast(device_type=device, dtype=amp_dtype, enabled=True):
+        _, loss = model(xb, yb)
 
-    checkpoint_dir = Path("checkpoints")
-    checkpoint_dir.mkdir(exist_ok=True)
-    best_val_loss = float("inf")
+    optimizer.zero_grad(set_to_none=True)
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
+    optimizer.step()
 
-    print("device:", device)
-    print("vocab_size:", vocab_size)
-    print("params:", sum(p.numel() for p in model.parameters()))
+torch.save({
+    "step": max_steps,
+    "model_state_dict": model.state_dict(),
+    "optimizer_state_dict": optimizer.state_dict(),
+}, checkpoint_dir / "final_model.pt")
 
-    start_time = time.time()
-
-    for step in range(max_steps + 1):
-        lr_now = get_lr(step)
-        for pg in optimizer.param_groups:
-            pg["lr"] = lr_now
-
-        if step % eval_every == 0:
-            losses = estimate_loss(model)
-            elapsed = time.time() - start_time
-            print(f"step {step} | train {losses['train']:.4f} | val {losses['val']:.4f} | lr {lr_now:.2e} | {elapsed:.0f}s")
-
-            if losses["val"] < best_val_loss:
-                best_val_loss = losses["val"]
-                torch.save({
-                    "step": step,
-                    "model_state_dict": model.state_dict(),
-                    "optimizer_state_dict": optimizer.state_dict(),
-                    "val_loss": best_val_loss,
-                }, checkpoint_dir / "best_model.pt")
-
-        xb, yb = get_batch("train")
-
-        with torch.autocast(device_type=device, dtype=amp_dtype, enabled=True):
-            _, loss = model(xb, yb)
-
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
-        optimizer.step()
-
-    torch.save({
-        "step": max_steps,
-        "model_state_dict": model.state_dict(),
-        "optimizer_state_dict": optimizer.state_dict(),
-    }, checkpoint_dir / "final_model.pt")
-
-    print(f"training done in {time.time() - start_time:.0f}s, best val loss {best_val_loss:.4f}")
-
-
-if __name__ == '__main__':
-    main()
+print(f"training done in {time.time() - start_time:.0f}s, best val loss {best_val_loss:.4f}")
