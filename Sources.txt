@@ -1,4 +1,90 @@
-#  Links to Datasets
+#  Links to Datasets from Hugging Face
+
+
+  #HuggingFaceTB/smollm-corpus:
+      @software{benallal2024smollmcorpus,
+        author = {Ben Allal, Loubna and Lozhkov, Anton and Penedo, Guilherme and Wolf, Thomas and von Werra, Leandro},
+        title = {SmolLM-Corpus},
+        month = July,
+        year = 2024,
+        url = {https://huggingface.co/datasets/HuggingFaceTB/smollm-corpus}
+      }
+
+
+  #openai/gsm8k:
+    @article{cobbe2021gsm8k,
+      title={Training Verifiers to Solve Math Word Problems},
+      author={Cobbe, Karl and Kosaraju, Vineet and Bavarian, Mohammad and Chen, Mark and Jun, Heewoo and Kaiser, Lukasz and Plappert, Matthias and Tworek, Jerry and Hilton, Jacob and Nakano, Reiichiro and Hesse, Christopher and Schulman, John},
+      journal={arXiv preprint arXiv:2110.14168},
+      year={2021}
+    }
+
+
+  #Tommy0201/Kaggle_CNN_Text_Summarization
+      title={Kaggle_CNN_Text_Summarization},
+      author={Minh (Tommy) Nguyen},
+      url = {https://huggingface.co/datasets/Tommy0201/Kaggle_CNN_Text_Summarization}
+    }
+
+
+  #tanaos/synthetic-text-summarization-dataset-v1 
+      title={tanaos/synthetic-text-summarization-dataset-v1},
+      author={tanaos},
+      url = {https://huggingface.co/datasets/tanaos/synthetic-text-summarization-dataset-v1}
+    }
+
+
+  #iamtarun/python_code_instructions_18k_alpaca
+      title={python_code_instructions_18k_alpaca},
+      author={iamtarun},
+      url = {https://huggingface.co/datasets/iamtarun/python_code_instructions_18k_alpaca}
+    }  
+
+
+  #ar852/scraped-chatgpt-conversations
+      title={scraped-chatgpt-conversations},
+      author={Arya Nistane},
+      url = {https://huggingface.co/datasets/ar852/scraped-chatgpt-conversations}
+    }
+
+
+  #open-thoughts/OpenThoughts-Agent-SFT-100K
+      title={OpenThoughts-Agent-SFT-100K},
+      author={open-thoughts},
+      url = {https://huggingface.co/datasets/open-thoughts/OpenThoughts-Agent-SFT-100K}
+    }
+
+
+  #fka/prompts.chat
+      title={prompts.chat},
+      author={Fatih Kadir Akın},
+      url = {https://huggingface.co/datasets/fka/prompts.chat}
+    }
+
+
+  #m-a-p/SuperGPQA
+  @misc{pteam2025supergpqascalingllmevaluation,
+        title={SuperGPQA: Scaling LLM Evaluation across 285 Graduate Disciplines}, 
+        author={M-A-P Team and Xinrun Du and Yifan Yao and Kaijing Ma and Bingli Wang and Tianyu Zheng and Kang Zhu and Minghao Liu and Yiming Liang and Xiaolong Jin and Zhenlin Wei and Chujie Zheng and Kaixing Deng and Shuyue Guo and Shian Jia and Sichao Jiang and Yiyan Liao and Rui Li and Qinrui Li and Sirun Li and Yizhi Li and Yunwen Li and Dehua Ma and Yuansheng Ni and Haoran Que and Qiyao Wang and Zhoufutu Wen and Siwei Wu and Tianshun Xing and Ming Xu and Zhenzhu Yang and Zekun Moore Wang and Junting Zhou and Yuelin Bai and Xingyuan Bu and Chenglin Cai and Liang Chen and Yifan Chen and Chengtuo Cheng and Tianhao Cheng and Keyi Ding and Siming Huang and Yun Huang and Yaoru Li and Yizhe Li and Zhaoqun Li and Tianhao Liang and Chengdong Lin and Hongquan Lin and Yinghao Ma and Zhongyuan Peng and Zifan Peng and Qige Qi and Shi Qiu and Xingwei Qu and Yizhou Tan and Zili Wang and Chenqing Wang and Hao Wang and Yiya Wang and Yubo Wang and Jiajun Xu and Kexin Yang and Ruibin Yuan and Yuanhao Yue and Tianyang Zhan and Chun Zhang and Jingyang Zhang and Xiyue Zhang and Xingjian Zhang and Yue Zhang and Yongchi Zhao and Xiangyu Zheng and Chenghua Zhong and Yang Gao and Zhoujun Li and Dayiheng Liu and Qian Liu and Tianyu Liu and Shiwen Ni and Junran Peng and Yujia Qin and Wenbo Su and Guoyin Wang and Shi Wang and Jian Yang and Min Yang and Meng Cao and Xiang Yue and Zhaoxiang Zhang and Wangchunshu Zhou and Jiaheng Liu and Qunshu Lin and Wenhao Huang and Ge Zhang},
+        year={2025},
+        eprint={2502.14739},
+        archivePrefix={arXiv},
+        primaryClass={cs.CL},
+        url={https://arxiv.org/abs/2502.14739}, 
+  }
+
+
+#OpenDataArena/MMFineReason-1.8M-Qwen3-VL-235B-Thinking
+  @misc{lin2026mmfinereasonclosingmultimodalreasoning,
+        title={MMFineReason: Closing the Multimodal Reasoning Gap via Open Data-Centric Methods}, 
+        author={Honglin Lin and Zheng Liu and Yun Zhu and Chonghan Qin and Juekai Lin and Xiaoran Shang and Conghui He and Wentao Zhang and Lijun Wu},
+        year={2026},
+        eprint={2601.21821},
+        archivePrefix={arXiv},
+        primaryClass={cs.CV},
+        url={https://arxiv.org/abs/2601.21821}, 
+  }
+
 
 #  Links to Websites/Research Papers
 
