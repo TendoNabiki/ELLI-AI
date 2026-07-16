@@ -87,8 +87,11 @@
 
 
 #  Links to Websites/Research Papers
-
+  https://streamlit.io/
+  
 #  Links to videos used for research
 
 #  Credits to any AI(s) used (And what they were used for)
-
+Eddie:
+  Copilot for VS Code; Inline Suggestions
+  Gemini; Research for how to code with streamlit.io
