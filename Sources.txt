@@ -90,5 +90,5 @@
 
 #  Links to videos used for research
 
-#  Credits to any AI(s) used
+#  Credits to any AI(s) used (And what they were used for)
 
