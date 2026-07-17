@@ -1,0 +1,6 @@
+streamlit
+torch
+tokenizers
+numpy
+pandas
+scikit-learn
