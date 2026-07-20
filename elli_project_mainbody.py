@@ -1,16 +1,9 @@
 import numpy as np
-import pandas as pd
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import sklearn
 import math
 import time
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score, confusion_matrix, classification_report
-from sklearn.linear_model import LinearRegression, LogisticRegression
-from sklearn.preprocessing import StandardScaler
-from sklearn.neighbors import KNeighborsClassifier
 from pathlib import Path
 from tokenizers import Tokenizer
 
@@ -58,7 +51,13 @@ if SMOKE_TEST:
     warmup_steps = 5
     print("=== SMOKE_TEST=True: quick sanity pass on the real model/data, not a real training run ===")
 
-tokenizer = Tokenizer.from_file("my_custom_tokenizer.json")
+TOKENIZER_PATH = "my_custom_tokenizer.json"
+if not Path(TOKENIZER_PATH).exists():
+    raise FileNotFoundError(
+        f"Missing {TOKENIZER_PATH} -- make sure you're running this script from "
+        f"the directory containing your tokenizer file (or update TOKENIZER_PATH)."
+    )
+tokenizer = Tokenizer.from_file(TOKENIZER_PATH)
 vocab_size = tokenizer.get_vocab_size()
 
 def encode(s: str):
@@ -67,61 +66,110 @@ def encode(s: str):
 def decode(ids):
     return tokenizer.decode(ids)
 
-# CHANGED: your Training_Data folder has ~1000 .bin files (cosmopedia-v2 is
-# just one of them), not a single named file. Load every .bin file in the
-# folder and concatenate them in sorted order into one stream, then apply the
-# same EOS-boundary split as before on top of that combined stream -- the
-# split still snaps to a document edge, it just doesn't matter which of the
-# 1000 source files that edge happens to land in.
-BIN_DIR = "Training_Data"
-VAL_FRACTION = 0.05  # fraction of tokens (snapped to the nearest document boundary) held out for val
+# CHANGED: no pre-tokenized .bin files at all anymore. Training reads directly
+# from your Training_Data/*.json text files (same format as your tokenizer
+# training code: one document per line). To do this without ever loading the
+# whole multi-billion-token corpus into RAM, this builds a lightweight INDEX
+# of where every line lives on disk (which file, what byte offset) -- not the
+# text itself. Each training example is then assembled by seeking to a few
+# random offsets, reading just those lines, and tokenizing them fresh, on the
+# spot. Nothing about the corpus is ever pre-tokenized or persisted to disk.
+JSON_DIR = "Training_Data"
+VAL_FRACTION = 0.05  # fraction of documents (by count) held out for val
 
-bin_paths = sorted(Path(BIN_DIR).glob("*.bin"))
-if not bin_paths:
-    raise FileNotFoundError(f"No .bin files found in {BIN_DIR}/")
+json_paths = sorted(Path(JSON_DIR).glob("*.json"))
+if not json_paths:
+    raise FileNotFoundError(f"No .json files found in {JSON_DIR}/")
 
-all_tokens = np.concatenate([np.fromfile(p, dtype=np.uint16) for p in bin_paths])
-print(f"loaded {len(bin_paths)} .bin files, {len(all_tokens):,} tokens total")
+# One-time scan to find every non-empty line's (file, byte offset). This reads
+# through the files but never tokenizes or holds full text in memory -- only
+# small integers get kept, so this stays cheap even across ~1000 files.
+_file_idx_list = []
+_offset_list = []
+for fi, path in enumerate(json_paths):
+    with open(path, "rb") as f:
+        while True:
+            offset = f.tell()
+            raw_line = f.readline()
+            if not raw_line:
+                break
+            if raw_line.decode("utf-8", errors="replace").strip():
+                _file_idx_list.append(fi)
+                _offset_list.append(offset)
 
-eos_id = tokenizer.token_to_id("[EOS]")
-eos_positions = np.where(all_tokens == eos_id)[0]
+file_indices = np.array(_file_idx_list, dtype=np.uint32)
+byte_offsets = np.array(_offset_list, dtype=np.int64)
+print(f"indexed {len(json_paths)} .json files, {len(file_indices):,} documents total")
 
-if VAL_FRACTION <= 0 or len(eos_positions) == 0:
-    split_point = len(all_tokens)  # no val split -- everything is train
+# Document-level train/val split -- same idea as before (whole documents only
+# ever land on one side), just expressed as an index split instead of a
+# token-stream split, since there's no token stream anymore.
+n_docs = len(file_indices)
+n_val = max(1, int(VAL_FRACTION * n_docs)) if VAL_FRACTION > 0 else 0
+if n_val > 0:
+    train_file_idx, train_offsets = file_indices[:-n_val], byte_offsets[:-n_val]
+    val_file_idx, val_offsets = file_indices[-n_val:], byte_offsets[-n_val:]
 else:
-    target = int((1 - VAL_FRACTION) * len(all_tokens))
-    candidates = eos_positions[eos_positions >= target]
-    # +1 so the split lands right after the EOS token (EOS stays with train,
-    # the next document -- whichever one it is -- starts val)
-    split_point = (candidates[0] + 1) if len(candidates) > 0 else (eos_positions[-1] + 1)
+    train_file_idx, train_offsets = file_indices, byte_offsets
+    val_file_idx, val_offsets = np.array([], dtype=np.uint32), np.array([], dtype=np.int64)
 
-train_data = torch.from_numpy(all_tokens[:split_point].astype(np.int64))
-val_data = torch.from_numpy(all_tokens[split_point:].astype(np.int64))
-
-# Optional, flexible control over how much data actually gets used. Leave both
-# as None to use everything up through the split above (default behavior).
-DATA_FRACTION = None     # e.g. 0.1 = use only the first 10% of tokens in each split
-MAX_TRAIN_TOKENS = None  # e.g. 2_000_000 = cap training tokens
-MAX_VAL_TOKENS = None    # same idea, for val
+# Optional, flexible control over how much data actually gets used -- now
+# expressed in documents rather than tokens, since there's no pre-tokenized
+# array to slice. Leave both as None to use every indexed document.
+DATA_FRACTION = None    # e.g. 0.1 = use only the first 10% of documents in each split
+MAX_TRAIN_DOCS = None   # e.g. 50_000 = cap the train split at 50k documents
+MAX_VAL_DOCS = None     # same idea, for val
 
 if DATA_FRACTION is not None:
-    train_data = train_data[:int(len(train_data) * DATA_FRACTION)]
-    val_data = val_data[:int(len(val_data) * DATA_FRACTION)]
-if MAX_TRAIN_TOKENS is not None:
-    train_data = train_data[:MAX_TRAIN_TOKENS]
-if MAX_VAL_TOKENS is not None:
-    val_data = val_data[:MAX_VAL_TOKENS]
+    train_file_idx = train_file_idx[:int(len(train_file_idx) * DATA_FRACTION)]
+    train_offsets = train_offsets[:int(len(train_offsets) * DATA_FRACTION)]
+    val_file_idx = val_file_idx[:int(len(val_file_idx) * DATA_FRACTION)]
+    val_offsets = val_offsets[:int(len(val_offsets) * DATA_FRACTION)]
+if MAX_TRAIN_DOCS is not None:
+    train_file_idx = train_file_idx[:MAX_TRAIN_DOCS]
+    train_offsets = train_offsets[:MAX_TRAIN_DOCS]
+if MAX_VAL_DOCS is not None:
+    val_file_idx = val_file_idx[:MAX_VAL_DOCS]
+    val_offsets = val_offsets[:MAX_VAL_DOCS]
 
-assert len(train_data) > block_size + 1, f"train split has fewer tokens than block_size -- check {BIN_DIR}/*.bin exists and has enough data"
-assert len(val_data) > block_size + 1, f"val split has fewer tokens than block_size -- lower block_size, raise VAL_FRACTION, or check {BIN_DIR}/*.bin has more than one document"
+assert len(train_file_idx) > 0, f"no training documents indexed -- check {JSON_DIR}/*.json has non-empty lines"
+assert len(val_file_idx) > 0, f"no validation documents indexed -- raise VAL_FRACTION or add more data to {JSON_DIR}/*.json"
+
+bos_id = tokenizer.token_to_id("[BOS]")
+eos_id = tokenizer.token_to_id("[EOS]")
+
+def _read_line(file_idx, offset):
+    with open(json_paths[file_idx], "rb") as f:
+        f.seek(offset)
+        raw_line = f.readline()
+    return raw_line.decode("utf-8", errors="replace").strip()
+
+def _sample_example(file_idx_arr, offset_arr, target_len):
+    # Keep pulling random documents (each wrapped in [BOS]...[EOS], same as
+    # your data-prep code) and concatenating them until there are enough
+    # tokens to fill one training example, then truncate to exactly
+    # target_len. A single example can span multiple documents, same as
+    # standard causal LM training on concatenated documents.
+    ids = []
+    while len(ids) < target_len:
+        i = np.random.randint(0, len(file_idx_arr))
+        line = _read_line(int(file_idx_arr[i]), int(offset_arr[i]))
+        if not line:
+            continue
+        ids.extend([bos_id] + tokenizer.encode(line).ids + [eos_id])
+    return ids[:target_len]
 
 torch.manual_seed(0)
 
 def get_batch(split):
-    d = train_data if split == "train" else val_data
-    ix = torch.randint(0, len(d) - block_size - 1, (batch_size,))
-    x = torch.stack([d[i:i+block_size] for i in ix])
-    y = torch.stack([d[i+1:i+block_size+1] for i in ix])
+    file_idx_arr, offset_arr = (train_file_idx, train_offsets) if split == "train" else (val_file_idx, val_offsets)
+    xs, ys = [], []
+    for _ in range(batch_size):
+        ids = _sample_example(file_idx_arr, offset_arr, block_size + 1)
+        xs.append(ids[:-1])
+        ys.append(ids[1:])
+    x = torch.tensor(xs, dtype=torch.long)
+    y = torch.tensor(ys, dtype=torch.long)
     return x.to(device), y.to(device)
 
 @torch.no_grad()
@@ -246,6 +294,20 @@ class ELLI(nn.Module):
 # Train
 
 model = ELLI(vocab_size, d_model, n_heads, n_layers, block_size).to(device)
+
+# ADDED: optional warm-start from an existing checkpoint (e.g. one produced by
+# grow_model.py, or just resuming these exact dimensions) instead of fresh
+# random weights. Leave as None for the previous/default behavior.
+# Note: only the model weights are restored here, not the optimizer state --
+# for a grown model the old optimizer's per-parameter moment estimates don't
+# apply to the newly appended layers anyway, so it's simplest to always start
+# the optimizer fresh below regardless of whether this is used.
+INIT_FROM_CHECKPOINT = None  # e.g. "checkpoints/grown_model.pt"
+if INIT_FROM_CHECKPOINT is not None:
+    _init_ckpt = torch.load(INIT_FROM_CHECKPOINT, map_location=device, weights_only=False)
+    model.load_state_dict(_init_ckpt["model_state_dict"])
+    print(f"initialized model weights from {INIT_FROM_CHECKPOINT}")
+
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
 # torch.compile() itself doesn't fail even on an unsupported setup -- it compiles
@@ -266,6 +328,14 @@ except Exception as e:
 # the same exponent range as fp32, so unlike fp16 it doesn't need GradScaler /
 # loss scaling at all.
 amp_dtype = torch.bfloat16
+
+# ADDED: torch.compile wraps the model, so model.state_dict() would save every key
+# prefixed with "_orig_mod." -- harmless while training continues in this same
+# process, but it silently breaks load_state_dict() later into a fresh, uncompiled
+# ELLI (e.g. for inference, or resuming after a code fix). This always saves plain,
+# portable keys regardless of whether torch.compile is active.
+def raw_state_dict(m):
+    return m._orig_mod.state_dict() if hasattr(m, "_orig_mod") else m.state_dict()
 
 checkpoint_dir = Path("checkpoints")
 checkpoint_dir.mkdir(exist_ok=True)
@@ -294,7 +364,7 @@ for step in range(max_steps + 1):
             best_val_loss = losses["val"]
             torch.save({
                 "step": step,
-                "model_state_dict": model.state_dict(),
+                "model_state_dict": raw_state_dict(model),
                 "optimizer_state_dict": optimizer.state_dict(),
                 "val_loss": best_val_loss,
             }, checkpoint_dir / "best_model.pt")
@@ -311,7 +381,7 @@ for step in range(max_steps + 1):
 
 torch.save({
     "step": max_steps,
-    "model_state_dict": model.state_dict(),
+    "model_state_dict": raw_state_dict(model),
     "optimizer_state_dict": optimizer.state_dict(),
 }, checkpoint_dir / "final_model.pt")
 
