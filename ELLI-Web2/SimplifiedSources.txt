@@ -1,0 +1,76 @@
+ELLI Project Sources & References:
+
+
+
+1. Datasets (via Hugging Face)
+
+SmolLM-Corpus
+Authors: Loubna Ben Allal, Anton Lozhkov, Guilherme Penedo, Thomas Wolf, Leandro von Werra (2024)
+Link: https://huggingface.co/datasets/HuggingFaceTB/smollm-corpus
+
+
+
+GSM8K (Grade School Math Dataset)
+Research Paper: "Training Verifiers to Solve Math Word Problems" by Karl Cobbe et al. (2021)
+Kaggle CNN Text Summarization
+Author: Minh (Tommy) Nguyen
+Link: https://huggingface.co/datasets/Tommy0201/Kaggle_CNN_Text_Summarization
+
+
+
+Synthetic Text Summarization Dataset v1
+Author: tanaos
+Link: https://huggingface.co/datasets/tanaos/synthetic-text-summarization-dataset-v1
+
+
+
+Python Code Instructions 18k Alpaca
+Author: iamtarun
+Link: https://huggingface.co/datasets/iamtarun/python_code_instructions_18k_alpaca
+
+
+
+Scraped ChatGPT Conversations
+Author: Arya Nistane
+Link: https://huggingface.co/datasets/ar852/scraped-chatgpt-conversations
+
+
+
+OpenThoughts-Agent-SFT-100K
+Author: open-thoughts
+Link: https://huggingface.co/datasets/open-thoughts/OpenThoughts-Agent-SFT-100K
+
+
+
+Prompts.chat
+Author: Fatih Kadir Akın
+Link: https://huggingface.co/datasets/fka/prompts.chat
+
+
+
+SuperGPQA: Scaling LLM Evaluation across 285 Graduate Disciplines
+Author: M-A-P Team et al. (2025)
+Research Link: https://arxiv.org/abs/2502.14739
+
+
+
+MMFineReason: Closing the Multimodal Reasoning Gap via Open Data-Centric Methods
+Author: Honglin Lin et al. (2026)
+Research Link: https://arxiv.org/abs/2601.21821
+
+
+
+2. Websites & Research Frameworks
+
+
+Streamlit Open-Source App Framework
+Link: https://streamlit.io/
+
+
+
+3. AI Tools & Development Credits
+
+
+Eddie:
+GitHub Copilot (for VS Code): Used for inline code completions and suggestions.
+Gemini: Used for framework research and learning how to build with Streamlit.

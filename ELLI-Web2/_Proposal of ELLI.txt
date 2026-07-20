@@ -1,0 +1,147 @@
+Proposal of ELLI
+
+
+Introduction: 
+On June 11st 2026, Edward Franco brought the idea of an Evolving Language Learning Intelligence(ELLI) and created the first prototype of ELLI. ELLI has the idea of a model which can constantly learn from the user by the historical memory and the information the user gave it to specify its ability.
+	After careful discussion inside our group “Enigma”, the project ELLI has now come to the situation where we need to have the courage to attempt and make bold plans, then verify  the feasibility of it.
+	In the article afterward, it will demonstrate how our team is going to fulfill this project and accomplish our goal.
+
+
+Thesis: 
+	The ELLI project is totally, absolutely, perfectly doable for our group Enigma if we cooperate together. 
+	The ELLI project will solve the issue of models exceeding 70 Billion Parameters.
+ELLI is designed to be able to be very adaptable to any scenario with one single particular objective and narrative. We have a Cognition&Introspection layer to help it serve its purpose better, as a constantly running layer.
+The ELLI will be able to work as an AI agent.
+There are 5 mechanisms will be described in the following part “Mechanism” which are:
+		a. Learning (Fine Tuning)
+		b. Thinking (Cognition & Introspection)
+		c. Utilize the Computation Time 
+		d. Better Data for Training
+		e. Light Model
+
+
+
+Mechanism:
+
+Learning (Fine Tuning)
+
+If we have a model, we can use Fine
+tuning to modify the weights of 
+the model.
+For our ELLI project, the Fine Tuning
+process will  happen spontaneously. It will
+automatically review the historical chat and information, and apply it to further conversations.
+	
+	Why is this significant? If we want to inform the model something, usually it will be the prompt 
+to do the work. But the spontaneous Fine Tuning could make it possible for the model to learn 
+something from the user and memorize some habits of the user. So the model can be modified 
+easily.
+	However, it is going to use the memory into the thinking layer, and then use the thinking 
+layer backward to feed the learning.
+
+Thinking (Cognition & Introstection)
+
+Background Information: 
+	As we are doing a Large Language Model, I suggest using Transformer Architecture, Multi-head Self-attention.
+The Thinking layer is a separate layer of the Transformer Architecture which is different from the Chain of thoughts but similar. We use two separate models in training, The input will pass down from the first model to the second model, then we look at the result of the second model to determine its proficiency; then we train it separately to avoid both models form a bound that they have to need each other to work, and specify the thinking.
+I will now call the thinking layer First Stage Model, and all the output layer Second Stage Model.
+The First Stage is supposed to run simultaneously as the Second Stage, but whatever the input is processed through the First Stage, First Stage will give some instructions for the Second Stage. The First Stage will run anytime the user allows it to run, and it will also determine what information to pass to the Learning Layer.
+It can help it to think ahead.
+
+
+
+
+Thinking Layer(First Stage)				Output Layer(Second Stage)
+Utilize the Computation Time:
+We would use the GPU on Kaggle to train our model or any other GPU. To utilize the computation time, we use bf16 format.
+We are going to do the pre-training by ourselves, and of course Embedding. So we need to start calculating how much time we need.
+
+Static Memory = 2P + 2P  + 12P = 16P Bytes
+Model Weights: 2Pbytes (2 bytes per parameter in BF16/FP16 precision).
+Gradients: 2P bytes (2 bytes per parameter in BF16/FP16 precision).
+AdamW Optimizer States: 12P bytes.
+
+3 * 10^8 * 16 Bytes =  4.8 GB
+
+
+Total Compute (FLOPs) = approx 6 * P * D
+
+	Roughly,  we have 20 tokens for every parameter:
+		20 tokens * 3 *10^8 = 6 * 10^9
+FLOPs = 6 * (3 * 10^8) * 6 * 10^9
+	= 3.6 * 10^18 
+
+
+P: Model Parameter Count (e.g., 3 * 10^8 for a 300 million model).
+D: Total Dataset Size in Tokens (e.g., 1 * 10^12 for a 1 Trillion token dataset).
+We can decide how much dataset to have and how many parameters to have
+
+
+
+Data
+
+The most important part of the project is data for the pre-trainning. And that’s why I don’t simply use existing models. As I said, I need 2 models to train separately and together back and forth. Existing models have already gone through pre-training, you can only do  so much fine tuning.
+The data needs to be clear at logics and easy to understand.
+	After calculation, we need 6*10^9 tokens of data for our 300 million parameter model. Assume 1 token is 1-4 byte, take the extreme condition, that would be 6 * 10^9 tokens * 4 bytes.
+	Conclusion: 100 GB would fit the situation.
+
+Model Size
+I recommend a light model. A light model is the only possible way for us to train by ourselves.
+	 A 300 million parameter model would be the best. As this would be efficient and easily trained.
+Meanwhile, a light model could give us the advantage of being able to run our thinking layer
+24/7.
+
+By using a Mixture of Expert in our model, the model will run more efficiently.
+
+	
+
+
+
+
+Things to do and code:
+	Week4:
+		We complete the basic structure of the Transformer Architecture, the Embedding and the 
+data collecting.
+Also, we decide the roles as fast as we can.
+	
+
+	There are roles you can choose:
+Data Scientist:
+Your name: Eddie Franco
+Architecture Engineer: Do the embedding and transformer architecture
+Your name: Roy Zhou, Brian Suh
+AI data engineer: Programmer on Fine tuning and API keys, scrapping the data
+			Your name: Kamesh surapuraju, Vikranth Maddali
+	Week5:
+		AI Training and time reservation	
+		Wrap up everything really quick.
+		Monday: Finish the Embedding
+		Tuesday: Finish the Transformer architecture
+		Wednesday: Finish integrating the data
+		Thursday: Last check
+		Friday: Train
+	
+
+	Week6:
+		Start testing the model
+		Monday: Install the fine tuning
+		Tuesday: test API keys
+		Wednesday: test user input
+		Thursday: test run the model for 12 hours
+		Friday: Time reservation
+
+	Week7:
+		Prepare for the presentation.
+
+		Monday: 
+		Tuesday:
+		Wednesday: 
+		Thursday: 
+		Friday: 
+	Week8:
+		Time reservation
+
+
+
+Note:
+	40% done by 7/8
