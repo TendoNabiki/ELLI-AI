@@ -1,0 +1,20 @@
+import json
+from pathlib import Path
+
+def json_formatting(json_path):
+  folder = Path(json_path)
+  with open(folder, 'r') as f:
+    jf = json.load(f)
+    for frag in jf:
+      for key, values in frag.items():
+          format_values = f'[BOS] {values} [EOS]'
+          frag[key] = format_values
+      new_data = jf
+    with open(folder, 'w') as f:
+     json.dump(new_data, f,indent = 2, ensure_ascii = False)
+
+
+
+
+# Usage
+json_formatting("dbt_final.json")
