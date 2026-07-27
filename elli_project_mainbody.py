@@ -7,10 +7,17 @@ import time
 from pathlib import Path
 from tokenizers import Tokenizer
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+if torch.cuda.is_available():
+    device = "cuda" 
+    print("GPU is avaliable")    
+else:
+    device = "cpu"
+    print("CPU")
 
+#
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
+# This is an additional thing for the GPU of rtx 5080, which is AI
 
 block_size = 128
 batch_size = 64
@@ -30,6 +37,7 @@ eval_iters = 30
 warmup_steps = 100
 min_lr_ratio = 0.1
 
+#
 def get_lr(step):
     if step < warmup_steps:
         return lr * (step + 1) / warmup_steps
@@ -38,12 +46,10 @@ def get_lr(step):
     coeff = 0.5 * (1.0 + math.cos(math.pi * decay_ratio))
     min_lr = lr * min_lr_ratio
     return min_lr + coeff * (lr - min_lr)
+#This thing is modern warm up learning rate to avoid gradient explode, and cos decay learning rate which is a better way than optimizer.state(), which is better for backpa
 
-# SMOKE_TEST mode -- runs a handful of steps on your real model size, real
-# block_size, and real batch_size (so it still tells you whether the model fits in
-# your RTX 5080's VRAM), just with far fewer steps so you get a pass/fail answer in
-# seconds instead of committing to the full run blind. Flip to False for the real run.
-SMOKE_TEST = True
+# 
+SMOKE_TEST = False
 if SMOKE_TEST:
     max_steps = 20
     eval_every = 5
@@ -51,7 +57,8 @@ if SMOKE_TEST:
     warmup_steps = 5
     print("=== SMOKE_TEST=True: quick sanity pass on the real model/data, not a real training run ===")
 
-TOKENIZER_PATH = "my_custom_tokenizer.json"
+#A Small modification, less epochs, less warm up steps (which is more risk of gradient explode in my understanding)
+TOKENIZER_PATH = "New_vocab.json"
 if not Path(TOKENIZER_PATH).exists():
     raise FileNotFoundError(
         f"Missing {TOKENIZER_PATH} -- make sure you're running this script from "
