@@ -73,24 +73,15 @@ def encode(s: str):
 def decode(ids):
     return tokenizer.decode(ids)
 
-# CHANGED: no pre-tokenized .bin files at all anymore. Training reads directly
-# from your Training_Data/*.json text files (same format as your tokenizer
-# training code: one document per line). To do this without ever loading the
-# whole multi-billion-token corpus into RAM, this builds a lightweight INDEX
-# of where every line lives on disk (which file, what byte offset) -- not the
-# text itself. Each training example is then assembled by seeking to a few
-# random offsets, reading just those lines, and tokenizing them fresh, on the
-# spot. Nothing about the corpus is ever pre-tokenized or persisted to disk.
+
 JSON_DIR = "Training_Data"
-VAL_FRACTION = 0.05  # fraction of documents (by count) held out for val
+VAL_FRACTION = 0.05
 
 json_paths = sorted(Path(JSON_DIR).glob("*.json"))
 if not json_paths:
     raise FileNotFoundError(f"No .json files found in {JSON_DIR}/")
 
-# One-time scan to find every non-empty line's (file, byte offset). This reads
-# through the files but never tokenizes or holds full text in memory -- only
-# small integers get kept, so this stays cheap even across ~1000 files.
+
 _file_idx_list = []
 _offset_list = []
 for fi, path in enumerate(json_paths):
@@ -108,9 +99,7 @@ file_indices = np.array(_file_idx_list, dtype=np.uint32)
 byte_offsets = np.array(_offset_list, dtype=np.int64)
 print(f"indexed {len(json_paths)} .json files, {len(file_indices):,} documents total")
 
-# Document-level train/val split -- same idea as before (whole documents only
-# ever land on one side), just expressed as an index split instead of a
-# token-stream split, since there's no token stream anymore.
+
 n_docs = len(file_indices)
 n_val = max(1, int(VAL_FRACTION * n_docs)) if VAL_FRACTION > 0 else 0
 if n_val > 0:
@@ -119,25 +108,6 @@ if n_val > 0:
 else:
     train_file_idx, train_offsets = file_indices, byte_offsets
     val_file_idx, val_offsets = np.array([], dtype=np.uint32), np.array([], dtype=np.int64)
-
-# Optional, flexible control over how much data actually gets used -- now
-# expressed in documents rather than tokens, since there's no pre-tokenized
-# array to slice. Leave both as None to use every indexed document.
-DATA_FRACTION = None    # e.g. 0.1 = use only the first 10% of documents in each split
-MAX_TRAIN_DOCS = None   # e.g. 50_000 = cap the train split at 50k documents
-MAX_VAL_DOCS = None     # same idea, for val
-
-if DATA_FRACTION is not None:
-    train_file_idx = train_file_idx[:int(len(train_file_idx) * DATA_FRACTION)]
-    train_offsets = train_offsets[:int(len(train_offsets) * DATA_FRACTION)]
-    val_file_idx = val_file_idx[:int(len(val_file_idx) * DATA_FRACTION)]
-    val_offsets = val_offsets[:int(len(val_offsets) * DATA_FRACTION)]
-if MAX_TRAIN_DOCS is not None:
-    train_file_idx = train_file_idx[:MAX_TRAIN_DOCS]
-    train_offsets = train_offsets[:MAX_TRAIN_DOCS]
-if MAX_VAL_DOCS is not None:
-    val_file_idx = val_file_idx[:MAX_VAL_DOCS]
-    val_offsets = val_offsets[:MAX_VAL_DOCS]
 
 assert len(train_file_idx) > 0, f"no training documents indexed -- check {JSON_DIR}/*.json has non-empty lines"
 assert len(val_file_idx) > 0, f"no validation documents indexed -- raise VAL_FRACTION or add more data to {JSON_DIR}/*.json"
@@ -152,11 +122,6 @@ def _read_line(file_idx, offset):
     return raw_line.decode("utf-8", errors="replace").strip()
 
 def _sample_example(file_idx_arr, offset_arr, target_len):
-    # Keep pulling random documents (each wrapped in [BOS]...[EOS], same as
-    # your data-prep code) and concatenating them until there are enough
-    # tokens to fill one training example, then truncate to exactly
-    # target_len. A single example can span multiple documents, same as
-    # standard causal LM training on concatenated documents.
     ids = []
     while len(ids) < target_len:
         i = np.random.randint(0, len(file_idx_arr))
@@ -230,13 +195,13 @@ class MultiHeadAttention(nn.Module):
         k = k.view(B, T, H, Hd).transpose(1, 2)
         v = v.view(B, T, H, Hd).transpose(1, 2)
 
-        scores = (q @ k.transpose(-2, -1)) / math.sqrt(Hd)  # (B,H,T,T)
+        scores = (q @ k.transpose(-2, -1)) / math.sqrt(Hd)
         scores = scores.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
 
         att = F.softmax(scores, dim=-1)
         att = self.drop(att)
 
-        out = att @ v  # (B,H,T,Hd)
+        out = att @ v
         out = out.transpose(1, 2).contiguous().view(B, T, D)
         out = self.drop(self.out(out))
         return out
@@ -271,15 +236,15 @@ class ELLI(nn.Module):
 
     def forward(self, idx, targets=None):
         B, T = idx.shape
-        tok = self.token_emb(idx)  # (B,T,D)
-        pos = self.pos_emb(torch.arange(T, device=idx.device))  # (T,D)
+        tok = self.token_emb(idx)
+        pos = self.pos_emb(torch.arange(T, device=idx.device))
         x = self.drop(tok + pos)
 
         for block in self.blocks:
             x = block(x)
 
         x = self.ln_f(x)
-        logits = self.head(x)  # (B,T,V)
+        logits = self.head(x)
 
         loss = None
         if targets is not None:
@@ -298,18 +263,11 @@ class ELLI(nn.Module):
         self.train()
         return idx
 
-# Train
 
 model = ELLI(vocab_size, d_model, n_heads, n_layers, block_size).to(device)
 
-# ADDED: optional warm-start from an existing checkpoint (e.g. one produced by
-# grow_model.py, or just resuming these exact dimensions) instead of fresh
-# random weights. Leave as None for the previous/default behavior.
-# Note: only the model weights are restored here, not the optimizer state --
-# for a grown model the old optimizer's per-parameter moment estimates don't
-# apply to the newly appended layers anyway, so it's simplest to always start
-# the optimizer fresh below regardless of whether this is used.
-INIT_FROM_CHECKPOINT = None  # e.g. "checkpoints/grown_model.pt"
+
+INIT_FROM_CHECKPOINT = None
 if INIT_FROM_CHECKPOINT is not None:
     _init_ckpt = torch.load(INIT_FROM_CHECKPOINT, map_location=device, weights_only=False)
     model.load_state_dict(_init_ckpt["model_state_dict"])
@@ -317,9 +275,7 @@ if INIT_FROM_CHECKPOINT is not None:
 
 optimizer = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=weight_decay)
 
-# torch.compile() itself doesn't fail even on an unsupported setup -- it compiles
-# lazily on first real call, so this runs one dummy forward pass right now to force
-# compilation immediately and fall back to eager mode cleanly if it doesn't work.
+#this runs one dummy forward pass right now to force compilation immediately and fall back to eager mode cleanly if it doesn't work.
 try:
     compiled_model = torch.compile(model)
     with torch.no_grad():
@@ -331,24 +287,13 @@ try:
 except Exception as e:
     print(f"torch.compile: failed, falling back to eager mode ({e})")
 
-# bf16 for RTX 5080 (Blackwell -- full native bf16 tensor core support). bf16 has
-# the same exponent range as fp32, so unlike fp16 it doesn't need GradScaler /
-# loss scaling at all.
 amp_dtype = torch.bfloat16
 
-# ADDED: torch.compile wraps the model, so model.state_dict() would save every key
-# prefixed with "_orig_mod." -- harmless while training continues in this same
-# process, but it silently breaks load_state_dict() later into a fresh, uncompiled
-# ELLI (e.g. for inference, or resuming after a code fix). This always saves plain,
-# portable keys regardless of whether torch.compile is active.
 def raw_state_dict(m):
     return m._orig_mod.state_dict() if hasattr(m, "_orig_mod") else m.state_dict()
 
 checkpoint_dir = Path("checkpoints")
 checkpoint_dir.mkdir(exist_ok=True)
-# CHANGED: back to tracking best val loss (a real generalization signal) rather
-# than train loss (which keeps trending down even if the model starts
-# memorizing, so it's a weaker signal on its own).
 best_val_loss = float("inf")
 
 print("device:", device)
