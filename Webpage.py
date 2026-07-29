@@ -21,7 +21,7 @@ st.set_page_config(
 )
 
 # --- 1. INITIALIZE API CLIENTS ---
-groq_client = Groq(api_key=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)
+groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # --- 2. GLOBAL UI SETTINGS ---
 components.html(
